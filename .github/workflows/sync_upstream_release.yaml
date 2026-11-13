@@ -1,0 +1,64 @@
+name: Sync and Tag Upstream Release
+
+on:
+  # Check daily at 14:00 UTC (6:00 AM PST) for new upstream release tags
+  schedule:
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional upstream release tag to sync (e.g. v3.41.0). Leave empty to auto-detect latest release tag."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  sync-and-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Sync upstream release and create Seattle tag
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          git remote add upstream https://github.com/civiform/cloud-deploy-infra.git
+          git fetch upstream --tags
+
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            UPSTREAM_TAG="${INPUT_VERSION}"
+          else
+            UPSTREAM_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          fi
+
+          if [[ -z "${UPSTREAM_TAG}" ]]; then
+            echo "Could not find an upstream release tag."
+            exit 1
+          fi
+
+          SEATTLE_TAG="${UPSTREAM_TAG}-seattle"
+          echo "Latest upstream release tag: ${UPSTREAM_TAG}"
+          echo "Target Seattle tag: ${SEATTLE_TAG}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${SEATTLE_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${SEATTLE_TAG} already exists on origin. Nothing to do."
+            exit 0
+          fi
+
+          echo "Merging ${UPSTREAM_TAG} into main..."
+          git merge "${UPSTREAM_TAG}" --no-edit -m "Merge upstream release ${UPSTREAM_TAG}"
+          git push origin main
+
+          echo "Creating and pushing tag ${SEATTLE_TAG}..."
+          git tag -a "${SEATTLE_TAG}" -m "Seattle CiviForm ${UPSTREAM_TAG}"
+          git push origin "${SEATTLE_TAG}"
+
